@@ -315,6 +315,15 @@ struct CollectEntryPointUniformParams : PerEntryPointPass
             // At this point we know that `param` is not a varying shader parameter,
             // so that we want to turn it into an equivalent global shader parameter.
             //
+            // Special-case: parameters using ShaderRecord resource kind should not be
+            // collected into the generic entryPointParams block (push constants). Leave
+            // them as separate parameters so they will become distinct global parameters
+            // with ShaderRecord storage in the subsequent move pass / emit.
+            if (paramLayout->usesResourceKind(LayoutResourceKind::ShaderRecord))
+            {
+                continue;
+            }
+
             // If this is the first parameter we are running into, then we need
             // to deal with creating the structure type and global shader
             // parameter that our transformed entry point will use.

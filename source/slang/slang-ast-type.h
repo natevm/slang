@@ -456,6 +456,27 @@ class DescriptorHandleType : public PointerLikeType
     FIDDLE(...)
 };
 
+// Wrapper types used on entry-point parameters to explicitly classify
+// ray-tracing related bindings. These are generic types carrying an
+// element type `T` (accessible via BuiltinGenericType::getElementType()).
+FIDDLE()
+class ShaderRecordType : public PointerLikeType
+{
+    FIDDLE(...)
+};
+
+FIDDLE()
+class HitAttributeType : public PointerLikeType
+{
+    FIDDLE(...)
+};
+
+FIDDLE()
+class PayloadType : public PointerLikeType
+{
+    FIDDLE(...)
+};
+
 // Base class for types used when desugaring parameter block
 // declarations, includeing HLSL `cbuffer` or GLSL `uniform` blocks.
 FIDDLE(abstract)

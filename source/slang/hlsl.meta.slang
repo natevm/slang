@@ -23,6 +23,8 @@ interface IBufferDataLayout
 {
 }
 
+// (Wrapper types ShaderRecord/HitAttribute/Payload are declared in core.meta.slang.)
+
 /// @category misc_types
 __intrinsic_type($(kIROp_DefaultBufferLayoutType))
 __magic_type(DefaultDataLayoutType)

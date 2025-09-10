@@ -2407,6 +2407,24 @@ DIAGNOSTIC(
     "specified for Vulkan, nor is `-fvk-$1-shift` used.")
 
 DIAGNOSTIC(
+    39030,
+    Error,
+    nonUniformRTParamMustBeExplicit,
+    "in ray-tracing entry point, parameter '$0' must be explicit: use 'uniform', 'ShaderRecord<T>', 'Payload<T>', or 'HitAttribute<T>'")
+
+DIAGNOSTIC(
+    39031,
+    Error,
+    invalidDirectionOnPayloadWrapper,
+    "ray payload parameter '$0' must not use 'in', 'out', or 'inout' direction modifiers")
+
+DIAGNOSTIC(
+    39032,
+    Error,
+    conflictingParameterAttributes,
+    "parameter '$0' has conflicting attributes: 'push_constant' and 'shader_record'")
+
+DIAGNOSTIC(
     39071,
     Warning,
     bindingAttributeIgnoredOnUniform,

@@ -2343,6 +2343,21 @@ __intrinsic_type($(kIROp_ParameterBlockType))
 __magic_type(ParameterBlockType)
 struct ParameterBlock {}
 
+// Wrapper types for explicit entry-point parameter binding kinds for ray tracing.
+// These are generic markers erased during semantic checking; they do not
+// introduce runtime layout on their own.
+__generic<T>
+__magic_type(ShaderRecordType)
+struct ShaderRecord {}
+
+__generic<T>
+__magic_type(HitAttributeType)
+struct HitAttribute {}
+
+__generic<T>
+__magic_type(PayloadType)
+struct Payload {}
+
 /// @category stage_io
 __generic<T, let MAX_VERTS : uint>
 __magic_type(VerticesType)

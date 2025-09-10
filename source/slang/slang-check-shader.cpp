@@ -531,6 +531,45 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
         }
     }
 
+    // Error on bare (non-uniform) parameters in RT entry points for 2026+
+    if (getModule(entryPointFuncDecl)->getLinkage()->m_optionSet.getLanguageVersion() >= SLANG_LANGUAGE_VERSION_2026)
+    {
+        auto st = entryPoint->getStage();
+        switch (st)
+        {
+        case Stage::AnyHit:
+        case Stage::ClosestHit:
+        case Stage::Intersection:
+        case Stage::Miss:
+        case Stage::RayGeneration:
+        case Stage::Callable:
+            for (const auto& param : entryPointFuncDecl->getParameters())
+            {
+                // Allow if explicit uniform
+                if (param->hasModifier<HLSLUniformModifier>()) continue;
+                // Allow if explicit shader record marker
+                if (param->hasModifier<ShaderRecordAttribute>()) continue;
+                // Allow if wrapper markers present
+                if (param->findModifier<HitAttributeParameterModifier>()) continue;
+                if (param->findModifier<PayloadParameterModifier>()) continue;
+                // Allow if legacy varying qualifier used (in/out/inout)
+                if (param->hasModifier<InModifier>() || param->hasModifier<OutModifier>() || param->hasModifier<InOutModifier>())
+                    continue;
+                // Allow known built-in hit attribute type
+                if (auto drt = as<DeclRefType>(param->getType()))
+                {
+                    auto d = drt->getDeclRef().getDecl();
+                    if (d && d->getName() && String(d->getName()->text) == "BuiltInTriangleIntersectionAttributes")
+                        continue;
+                }
+                // Otherwise, require explicit annotation
+                sink->diagnose(param, Diagnostics::nonUniformRTParamMustBeExplicit, param->getName());
+            }
+            break;
+        default: break;
+        }
+    }
+
     for (auto target : linkage->targets)
     {
         auto targetCaps = target->getTargetCaps();

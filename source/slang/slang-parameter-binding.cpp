@@ -2597,6 +2597,104 @@ static RefPtr<TypeLayout> computeEntryPointParameterTypeLayout(
     auto paramType = getType(context->getASTBuilder(), paramDeclRef);
     SLANG_ASSERT(paramType);
 
+    // New explicit wrappers for ray-tracing entry point parameters.
+    // If present, these take precedence over legacy `in`/`out` inference.
+    // We detect both via internal marker modifiers (attached during semantics)
+    // and by matching the type to our magic wrapper types (for robustness).
+    if (paramDeclRef.getDecl()->hasModifier<ShaderRecordAttribute>() || as<ShaderRecordType>(paramType))
+    {
+        if (auto srt = as<ShaderRecordType>(paramType))
+            paramType = srt->getElementType();
+        if (auto drt = as<DeclRefType>(paramType))
+        {
+            if (auto decl = drt->getDeclRef().getDecl())
+            {
+                if (decl->getName() && String(decl->getName()->text) == "ShaderRecord")
+                {
+                    // unwrap element type from generic app
+                    SubstitutionSet subst(drt->getDeclRef());
+                    subst.forEachSubstitutionArg([&](Val* arg) {
+                        if (auto t = as<Type>(arg)) paramType = t; });
+                }
+            }
+        }
+        return createTypeLayoutWith(
+            context->layoutContext,
+            context->getRulesFamily()->getShaderRecordConstantBufferRules(),
+            paramType);
+    }
+    if (paramDeclRef.getDecl()->hasModifier<HitAttributeParameterModifier>() || as<HitAttributeType>(paramType))
+    {
+        if (auto hat = as<HitAttributeType>(paramType))
+            paramType = hat->getElementType();
+        if (auto drt = as<DeclRefType>(paramType))
+        {
+            if (auto decl = drt->getDeclRef().getDecl())
+            {
+                if (decl->getName() && String(decl->getName()->text) == "HitAttribute")
+                {
+                    SubstitutionSet subst(drt->getDeclRef());
+                    subst.forEachSubstitutionArg([&](Val* arg) {
+                        if (auto t = as<Type>(arg)) paramType = t; });
+                }
+            }
+        }
+        switch (state.stage)
+        {
+        case Stage::AnyHit:
+        case Stage::ClosestHit:
+            return createTypeLayoutWith(
+                context->layoutContext,
+                context->getRulesFamily()->getHitAttributesParameterRules(),
+                paramType);
+        default:
+            // Hit attributes are only valid on hit shaders.
+            getSink(context)->diagnose(
+                state.loc,
+                Diagnostics::dontExpectInParametersForStage,
+                getStageName(state.stage));
+            break;
+        }
+    }
+    if (paramDeclRef.getDecl()->hasModifier<PayloadParameterModifier>() || as<PayloadType>(paramType))
+    {
+        if (auto pt = as<PayloadType>(paramType))
+            paramType = pt->getElementType();
+        if (auto drt = as<DeclRefType>(paramType))
+        {
+            if (auto decl = drt->getDeclRef().getDecl())
+            {
+                if (decl->getName() && String(decl->getName()->text) == "Payload")
+                {
+                    SubstitutionSet subst(drt->getDeclRef());
+                    subst.forEachSubstitutionArg([&](Val* arg) {
+                        if (auto t = as<Type>(arg)) paramType = t; });
+                }
+            }
+        }
+        switch (state.stage)
+        {
+        case Stage::AnyHit:
+        case Stage::ClosestHit:
+        case Stage::Miss:
+            return createTypeLayoutWith(
+                context->layoutContext,
+                context->getRulesFamily()->getRayPayloadParameterRules(),
+                paramType);
+        case Stage::Callable:
+            return createTypeLayoutWith(
+                context->layoutContext,
+                context->getRulesFamily()->getCallablePayloadParameterRules(),
+                paramType);
+        default:
+            getSink(context)->diagnose(
+                state.loc,
+                Diagnostics::dontExpectInParametersForStage,
+                getStageName(state.stage));
+            break;
+        }
+    }
+
     if (paramDeclRef.getDecl()->hasModifier<HLSLUniformModifier>())
     {
         // An entry-point parameter that is explicitly marked `uniform` represents
@@ -2606,8 +2704,10 @@ static RefPtr<TypeLayout> computeEntryPointParameterTypeLayout(
         LayoutRulesImpl* layoutRules = nullptr;
         if (isKhronosTarget(context->getTargetRequest()))
         {
-            // For Vulkan, entry point uniform parameters are laid out using push constant buffer
-            // rules (defaults to std430).
+            // For Vulkan, entry-point uniform parameters map to push constants across all stages
+            // starting with language version 2026. Prior to that, legacy behavior applies where
+            // ray-tracing entry points used shader record. The container selection is handled in
+            // `collectEntryPointParameters`; here we just lay out the uniform fields.
             layoutRules = context->getRulesFamily()->getShaderStorageBufferRules(
                 context->getTargetProgram()->getOptionSet());
         }
@@ -3035,8 +3135,8 @@ static void removePerEntryPointParameterKinds(TypeLayout* typeLayout)
 {
     typeLayout->removeResourceUsage(LayoutResourceKind::VaryingInput);
     typeLayout->removeResourceUsage(LayoutResourceKind::VaryingOutput);
-    typeLayout->removeResourceUsage(LayoutResourceKind::ShaderRecord);
-    typeLayout->removeResourceUsage(LayoutResourceKind::HitAttributes);
+    // Keep ShaderRecord and HitAttributes so that per-entry-point
+    // resources for ray tracing wrappers are preserved.
     typeLayout->removeResourceUsage(LayoutResourceKind::ExistentialObjectParam);
     typeLayout->removeResourceUsage(LayoutResourceKind::ExistentialTypeParam);
 }
@@ -3047,8 +3147,7 @@ static void removePerEntryPointParameterKinds(VarLayout* varLayout)
 
     varLayout->removeResourceUsage(LayoutResourceKind::VaryingInput);
     varLayout->removeResourceUsage(LayoutResourceKind::VaryingOutput);
-    varLayout->removeResourceUsage(LayoutResourceKind::ShaderRecord);
-    varLayout->removeResourceUsage(LayoutResourceKind::HitAttributes);
+    // Keep ShaderRecord and HitAttributes for RT wrappers
     varLayout->removeResourceUsage(LayoutResourceKind::ExistentialObjectParam);
     varLayout->removeResourceUsage(LayoutResourceKind::ExistentialTypeParam);
 }
@@ -3154,22 +3253,34 @@ static RefPtr<EntryPointLayout> collectEntryPointParameters(
         // In the case of ray-tracing shaders, this means passing entry-point
         // `uniform` parameters via the "shader record."
         //
-        switch (entryPoint->getStage())
+        // From language version 2026 onward, uniform entry-point parameters always map to
+        // push constants across all stages. Prior to that, Vulkan ray-tracing entry points
+        // used the shader record for uniform parameters.
+        auto langVer = context->getTargetProgram()->getProgram()->getLinkage()->m_optionSet.getLanguageVersion();
+        if (langVer >= SLANG_LANGUAGE_VERSION_2026)
         {
-        default:
             layoutContext =
                 layoutContext.with(layoutContext.getRulesFamily()->getPushConstantBufferRules());
-            break;
+        }
+        else
+        {
+            switch (entryPoint->getStage())
+            {
+            default:
+                layoutContext = layoutContext.with(
+                    layoutContext.getRulesFamily()->getPushConstantBufferRules());
+                break;
 
-        case Stage::AnyHit:
-        case Stage::Callable:
-        case Stage::ClosestHit:
-        case Stage::Intersection:
-        case Stage::Miss:
-        case Stage::RayGeneration:
-            layoutContext = layoutContext.with(
-                layoutContext.getRulesFamily()->getShaderRecordConstantBufferRules());
-            break;
+            case Stage::AnyHit:
+            case Stage::Callable:
+            case Stage::ClosestHit:
+            case Stage::Intersection:
+            case Stage::Miss:
+            case Stage::RayGeneration:
+                layoutContext = layoutContext.with(
+                    layoutContext.getRulesFamily()->getShaderRecordConstantBufferRules());
+                break;
+            }
         }
     }
 

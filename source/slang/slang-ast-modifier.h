@@ -1043,6 +1043,22 @@ class ShaderRecordAttribute : public Attribute
     FIDDLE(...)
 };
 
+// Internal markers applied by semantic checking when users employ wrapper
+// entry-point parameter types like `Payload<T>`, `HitAttribute<T>`, and
+// `ShaderRecord<T>`. These are not exposed as user-facing attributes and are
+// used to drive parameter layout and validation.
+FIDDLE()
+class PayloadParameterModifier : public Modifier
+{
+    FIDDLE(...)
+};
+
+FIDDLE()
+class HitAttributeParameterModifier : public Modifier
+{
+    FIDDLE(...)
+};
+
 
 // [[vk_binding]]
 FIDDLE()
