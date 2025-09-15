@@ -319,7 +319,8 @@ struct CollectEntryPointUniformParams : PerEntryPointPass
             // collected into the generic entryPointParams block (push constants). Leave
             // them as separate parameters so they will become distinct global parameters
             // with ShaderRecord storage in the subsequent move pass / emit.
-            if (paramLayout->usesResourceKind(LayoutResourceKind::ShaderRecord))
+            if (paramLayout->usesResourceKind(LayoutResourceKind::ShaderRecord) ||
+                paramLayout->usesResourceKind(LayoutResourceKind::PushConstantBuffer))
             {
                 continue;
             }

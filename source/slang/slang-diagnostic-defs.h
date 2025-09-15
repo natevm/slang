@@ -2406,11 +2406,37 @@ DIAGNOSTIC(
     "shader parameter '$0' has a 'register' specified for D3D, but no '[[vk::binding(...)]]` "
     "specified for Vulkan, nor is `-fvk-$1-shift` used.")
 
+// Pre-2026: diagnostic unused
 DIAGNOSTIC(
     39030,
     Error,
     nonUniformRTParamMustBeExplicit,
-    "in ray-tracing entry point, parameter '$0' must be explicit: use 'uniform', 'ShaderRecord<T>', 'Payload<T>', or 'HitAttribute<T>'")
+    "in ray-tracing entry point, parameter '$0' must be explicit: use 'PushConstant<T>', 'ShaderRecord<T>', 'PayloadState<T>', or 'HitAttribute<T>'")
+
+// 2026+: we prefer a message that omits 'uniform'. If needed, use 39030 for older guidance.
+DIAGNOSTIC(
+    39033,
+    Error,
+    nonUniformRTParamMustBeExplicit2026,
+    "in ray-tracing entry point, parameter '$0' must be explicit: use 'PushConstant<T>', 'ShaderRecord<T>', 'PayloadState<T>', or 'HitAttribute<T>'")
+
+DIAGNOSTIC(
+    39034,
+    Error,
+    tooManyPayloadWrappers,
+    "can have at most one payload-state wrapper parameter; found $0.")
+
+DIAGNOSTIC(
+    39035,
+    Error,
+    tooManyHitAttributeWrappers,
+    "can have at most one hit-attribute wrapper parameter; found $0.")
+
+DIAGNOSTIC(
+    39036,
+    Error,
+    tooManyPushConstantWrappers,
+    "can have at most one push-constant wrapper parameter; found $0.")
 
 DIAGNOSTIC(
     39031,

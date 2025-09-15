@@ -9,7 +9,7 @@ RWStructuredBuffer<float> gOut;
 
 void main(HitAttribute<MyHitAttr> attr)
 {
-    gOut[0] = &attr.normal.x;
+    gOut[0] = attr.normal.x;
 }
 
 // CHECK_SPV: OpCapability RayTracing

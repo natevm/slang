@@ -2597,6 +2597,39 @@ static RefPtr<TypeLayout> computeEntryPointParameterTypeLayout(
     auto paramType = getType(context->getASTBuilder(), paramDeclRef);
     SLANG_ASSERT(paramType);
 
+    // If the parameter uses the PushConstant wrapper, treat it as a
+    // push-constant parameter regardless of language version. This ensures
+    // consistent behavior for -std 2025.
+    if (auto pct = as<PushConstantType>(paramType))
+    {
+        paramType = pct->getElementType();
+        return createTypeLayoutWith(
+            context->layoutContext,
+            context->getRulesFamily()->getPushConstantBufferRules(),
+            paramType);
+    }
+    if (auto drt = as<DeclRefType>(paramType))
+    {
+        if (auto decl = drt->getDeclRef().getDecl())
+        {
+            if (decl->getName() && String(decl->getName()->text) == "PushConstant")
+            {
+                // unwrap element type from generic app
+                SubstitutionSet subst(drt->getDeclRef());
+                Type* innerType = nullptr;
+                subst.forEachSubstitutionArg([&](Val* arg) { if (auto t = as<Type>(arg)) innerType = t; });
+                if (innerType)
+                {
+                    paramType = innerType;
+                    return createTypeLayoutWith(
+                        context->layoutContext,
+                        context->getRulesFamily()->getPushConstantBufferRules(),
+                        paramType);
+                }
+            }
+        }
+    }
+
     // New explicit wrappers for ray-tracing entry point parameters.
     // If present, these take precedence over legacy `in`/`out` inference.
     // We detect both via internal marker modifiers (attached during semantics)
@@ -2695,6 +2728,14 @@ static RefPtr<TypeLayout> computeEntryPointParameterTypeLayout(
         }
     }
 
+    // Explicit push-constant on an entry-point parameter: use push-constant rules.
+    if (paramDeclRef.getDecl()->hasModifier<PushConstantAttribute>())
+    {
+        return createTypeLayoutWith(
+            context->layoutContext,
+            context->getRulesFamily()->getPushConstantBufferRules(),
+            paramType);
+    }
     if (paramDeclRef.getDecl()->hasModifier<HLSLUniformModifier>())
     {
         // An entry-point parameter that is explicitly marked `uniform` represents
@@ -4622,15 +4663,43 @@ RefPtr<ProgramLayout> generateParameterBindings(TargetProgram* targetProgram, Di
     programLayout->parametersLayout = globalScopeVarLayout;
 
     {
-        const int numShaderRecordRegs = _calcTotalNumUsedRegistersForLayoutResourceKind(
-            &context,
-            LayoutResourceKind::ShaderRecord);
-        if (numShaderRecordRegs > 1)
+        // Enforce: at most one wrapper of each kind per entry point.
+        // This defers layout of the wrapper element type `T` to the end user,
+        // rather than concatenating multiple wrappers.
+        for (auto entryPointLayout : programLayout->entryPoints)
         {
-            sink->diagnose(
-                SourceLoc(),
-                Diagnostics::tooManyShaderRecordConstantBuffers,
-                numShaderRecordRegs);
+            auto funcDecl = entryPointLayout->getFuncDecl();
+            if (!funcDecl) continue;
+
+            int countShaderRecord = 0;
+            int countHitAttr = 0;
+            int countPayload = 0;
+            int countPushConst = 0;
+
+            for (auto paramDecl : funcDecl->getParameters())
+            {
+                if (paramDecl->findModifier<ShaderRecordAttribute>()) countShaderRecord++;
+                if (paramDecl->findModifier<HitAttributeParameterModifier>()) countHitAttr++;
+                if (paramDecl->findModifier<PayloadParameterModifier>()) countPayload++;
+                if (paramDecl->findModifier<PushConstantAttribute>()) countPushConst++;
+            }
+
+            if (countShaderRecord > 1)
+            {
+                sink->diagnose(funcDecl, Diagnostics::tooManyShaderRecordConstantBuffers, countShaderRecord);
+            }
+            if (countHitAttr > 1)
+            {
+                sink->diagnose(funcDecl, Diagnostics::tooManyHitAttributeWrappers, countHitAttr);
+            }
+            if (countPayload > 1)
+            {
+                sink->diagnose(funcDecl, Diagnostics::tooManyPayloadWrappers, countPayload);
+            }
+            if (countPushConst > 1)
+            {
+                sink->diagnose(funcDecl, Diagnostics::tooManyPushConstantWrappers, countPushConst);
+            }
         }
     }
 

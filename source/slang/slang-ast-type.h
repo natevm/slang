@@ -477,6 +477,12 @@ class PayloadType : public PointerLikeType
     FIDDLE(...)
 };
 
+FIDDLE()
+class PushConstantType : public PointerLikeType
+{
+    FIDDLE(...)
+};
+
 // Base class for types used when desugaring parameter block
 // declarations, includeing HLSL `cbuffer` or GLSL `uniform` blocks.
 FIDDLE(abstract)

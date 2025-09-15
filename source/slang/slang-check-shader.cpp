@@ -378,6 +378,18 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
     auto module = getModule(entryPointFuncDecl);
     auto linkage = module->getLinkage();
 
+    // Ensure parameter declarations are header-checked before validation so that
+    // wrapper sugar (e.g., PushConstant<T>, ShaderRecord<T>, PayloadState<T>, HitAttribute<T>)
+    // runs and attaches the expected markers/modifiers regardless of language version.
+    {
+        SharedSemanticsContext context(linkage, module, sink);
+        SemanticsVisitor visitor(&context);
+        for (auto paramDecl : entryPointFuncDecl->getParameters())
+        {
+            ensureDecl(&visitor, paramDecl, DeclCheckState::ReadyForReference);
+        }
+    }
+
     // Every entry point needs to have a stage specified either via
     // command-line/API options, or via an explicit `[shader("...")]` attribute.
     //
@@ -552,6 +564,7 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
                 // Allow if wrapper markers present
                 if (param->findModifier<HitAttributeParameterModifier>()) continue;
                 if (param->findModifier<PayloadParameterModifier>()) continue;
+                if (param->findModifier<PushConstantAttribute>()) continue;
                 // Allow if legacy varying qualifier used (in/out/inout)
                 if (param->hasModifier<InModifier>() || param->hasModifier<OutModifier>() || param->hasModifier<InOutModifier>())
                     continue;
@@ -563,7 +576,7 @@ void validateEntryPoint(EntryPoint* entryPoint, DiagnosticSink* sink)
                         continue;
                 }
                 // Otherwise, require explicit annotation
-                sink->diagnose(param, Diagnostics::nonUniformRTParamMustBeExplicit, param->getName());
+                sink->diagnose(param, Diagnostics::nonUniformRTParamMustBeExplicit2026, param->getName());
             }
             break;
         default: break;

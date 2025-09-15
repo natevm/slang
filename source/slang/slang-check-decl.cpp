@@ -9864,59 +9864,152 @@ void SemanticsDeclHeaderVisitor::visitParamDecl(ParamDecl* paramDecl)
         checkMeshOutputDecl(paramDecl);
     }
 
-    // Unwrap wrapper types used to explicitly bind ray-tracing entry-point parameters.
-    // We only apply these rules at or beyond language version 2026 to avoid breaking
-    // existing code.
-    if (getLinkage()->m_optionSet.getLanguageVersion() >= SLANG_LANGUAGE_VERSION_2026)
+    // Unwrap wrapper types used to explicitly bind entry-point parameters.
+    // Applies to all language versions so wrappers work pre-2026 as well.
+    if (paramDecl->findModifier<PushConstantAttribute>())
     {
-        // Attribute sugar on entry-point parameters
-        if (paramDecl->findModifier<PushConstantAttribute>())
+        // Treat as explicit uniform push-constant parameter.
+        bool hasUniform = false;
+        for (auto m : paramDecl->modifiers)
         {
-            // Treat as explicit uniform push-constant parameter.
-            bool hasUniform = false;
-            for (auto m : paramDecl->modifiers)
-            {
-                if (as<HLSLUniformModifier>(m)) { hasUniform = true; break; }
-            }
-            if (!hasUniform)
-            {
-                addModifier(paramDecl, m_astBuilder->create<HLSLUniformModifier>());
-            }
-            // Conflict if both push_constant and shader_record appear
-            if (paramDecl->findModifier<ShaderRecordAttribute>())
-            {
-                getSink()->diagnose(paramDecl, Diagnostics::conflictingParameterAttributes, paramDecl->getName());
-            }
+            if (as<HLSLUniformModifier>(m)) { hasUniform = true; break; }
         }
-
-        // If [[shader_record]] present on a parameter, wrap type into ConstantBuffer<T>
-        // and attach ShaderRecordAttribute.
+        if (!hasUniform)
+        {
+            addModifier(paramDecl, m_astBuilder->create<HLSLUniformModifier>());
+        }
+        // Conflict if both push_constant and shader_record appear
         if (paramDecl->findModifier<ShaderRecordAttribute>())
         {
-            if (!as<ConstantBufferType>(paramDecl->type.type))
+            getSink()->diagnose(paramDecl, Diagnostics::conflictingParameterAttributes, paramDecl->getName());
+        }
+    }
+
+    // If [[shader_record]] present on a parameter, wrap type into ConstantBuffer<T>
+    // and attach ShaderRecordAttribute.
+    if (paramDecl->findModifier<ShaderRecordAttribute>())
+    {
+        if (!as<ConstantBufferType>(paramDecl->type.type))
+        {
+            auto cbType = getConstantBufferType(paramDecl->type.type, m_astBuilder->getDefaultLayoutType());
+            paramDecl->type.type = cbType;
+        }
+    }
+
+    // Prefer built-in wrapper types if present
+    if (auto shaderRecordTy = as<ShaderRecordType>(paramDecl->type.type))
+    {
+        // Unwrap to element type and wrap as ConstantBuffer<T> so downstream
+        // layout sees a parameter-group for shader-record storage.
+        Type* innerType = shaderRecordTy->getElementType();
+        // Use default data layout for the buffer; shader-record mapping is
+        // driven by the ShaderRecordAttribute on the param.
+        auto cbType = getConstantBufferType(innerType, m_astBuilder->getDefaultLayoutType());
+        paramDecl->type.type = cbType;
+        addModifier(paramDecl, m_astBuilder->create<ShaderRecordAttribute>());
+    }
+    else if (auto hitAttrTy = as<HitAttributeType>(paramDecl->type.type))
+    {
+        paramDecl->type.type = hitAttrTy->getElementType();
+        addModifier(paramDecl, m_astBuilder->create<HitAttributeParameterModifier>());
+        // A hit attribute parameter must be input-only; if the user specified `out` or `inout`, diagnose.
+        for (auto modifier : paramDecl->modifiers)
+        {
+            if (as<OutModifier>(modifier) || as<InOutModifier>(modifier))
             {
-                auto cbType = getConstantBufferType(paramDecl->type.type, m_astBuilder->getDefaultLayoutType());
-                paramDecl->type.type = cbType;
+                getSink()->diagnose(
+                    modifier,
+                    Diagnostics::dontExpectOutParametersForStage,
+                    UnownedStringSlice("hit-attribute"));
+                break;
             }
         }
-
-        // Prefer built-in wrapper types if present
-        if (auto shaderRecordTy = as<ShaderRecordType>(paramDecl->type.type))
+    }
+    else if (auto payloadTy = as<PayloadType>(paramDecl->type.type))
+    {
+        paramDecl->type.type = payloadTy->getElementType();
+        addModifier(paramDecl, m_astBuilder->create<PayloadParameterModifier>());
+        // Disallow explicit direction modifiers on the wrapper itself.
+        bool hasDirection = false;
+        for (auto modifier : paramDecl->modifiers)
         {
-            // Unwrap to element type and wrap as ConstantBuffer<T> so downstream
-            // layout sees a parameter-group for shader-record storage.
-            Type* innerType = shaderRecordTy->getElementType();
-            // Use default data layout for the buffer; shader-record mapping is
-            // driven by the ShaderRecordAttribute on the param.
-            auto cbType = getConstantBufferType(innerType, m_astBuilder->getDefaultLayoutType());
-            paramDecl->type.type = cbType;
-            addModifier(paramDecl, m_astBuilder->create<ShaderRecordAttribute>());
+            if (as<InModifier>(modifier) || as<OutModifier>(modifier) || as<InOutModifier>(modifier) ||
+                as<RefModifier>(modifier) || as<ConstRefModifier>(modifier))
+            {
+                hasDirection = true;
+                // Only diagnose if the user explicitly wrote a direction.
+                if (as<InModifier>(modifier) || as<OutModifier>(modifier) || as<InOutModifier>(modifier))
+                {
+                    getSink()->diagnose(
+                        modifier,
+                        Diagnostics::invalidDirectionOnPayloadWrapper,
+                        paramDecl->getName());
+                }
+            }
         }
-        else if (auto hitAttrTy = as<HitAttributeType>(paramDecl->type.type))
+        // Default to inout semantics when no direction is specified so
+        // payload participates in both input and output linking.
+        if (!hasDirection)
         {
-            paramDecl->type.type = hitAttrTy->getElementType();
-            addModifier(paramDecl, m_astBuilder->create<HitAttributeParameterModifier>());
-            // A hit attribute parameter must be input-only; if the user specified `out` or `inout`, diagnose.
+            addModifier(paramDecl, m_astBuilder->create<InOutModifier>());
+        }
+    }
+    else if (auto pushConstTy = as<PushConstantType>(paramDecl->type.type))
+    {
+        // Treat as explicit uniform push-constant parameter.
+        paramDecl->type.type = pushConstTy->getElementType();
+        bool hasUniform = false;
+        for (auto m : paramDecl->modifiers)
+        {
+            if (as<HLSLUniformModifier>(m)) { hasUniform = true; break; }
+        }
+        if (!hasUniform)
+        {
+            addModifier(paramDecl, m_astBuilder->create<HLSLUniformModifier>());
+        }
+        addModifier(paramDecl, m_astBuilder->create<PushConstantAttribute>());
+    }
+    else
+    {
+        // Fallback: recognize wrappers by name as plain generics.
+        auto tryUnwrapByName = [&](const char* name, Modifier* marker) -> bool {
+            if (auto declRefType = as<DeclRefType>(paramDecl->type.type))
+            {
+                auto baseDecl = declRefType->getDeclRef().getDecl();
+                if (!baseDecl || !baseDecl->getName()) return false;
+                // Only treat named wrappers when referring to actual struct declarations,
+                // not generic type parameters or other symbols that may share the name.
+                if (!as<StructDecl>(baseDecl)) return false;
+                if (String(baseDecl->getName()->text) != name) return false;
+
+                Type* innerType = nullptr;
+                SubstitutionSet subst(declRefType->getDeclRef());
+                bool found = false;
+                subst.forEachSubstitutionArg([&](Val* arg) {
+                    if (found) return;
+                    if (auto t = as<Type>(arg))
+                    {
+                        innerType = t;
+                        found = true;
+                    }
+                });
+                if (!innerType)
+                {
+                    getSink()->diagnose(paramDecl, Diagnostics::invalidTypeVoid);
+                    return false;
+                }
+                paramDecl->type.type = innerType;
+                addModifier(paramDecl, marker);
+                return true;
+            }
+            return false;
+        };
+
+        if (tryUnwrapByName("ShaderRecord", m_astBuilder->create<ShaderRecordAttribute>()))
+        {
+        }
+        else if (tryUnwrapByName("HitAttribute", m_astBuilder->create<HitAttributeParameterModifier>()))
+        {
             for (auto modifier : paramDecl->modifiers)
             {
                 if (as<OutModifier>(modifier) || as<InOutModifier>(modifier))
@@ -9929,85 +10022,50 @@ void SemanticsDeclHeaderVisitor::visitParamDecl(ParamDecl* paramDecl)
                 }
             }
         }
-        else if (auto payloadTy = as<PayloadType>(paramDecl->type.type))
+        else if (tryUnwrapByName("PayloadState", m_astBuilder->create<PayloadParameterModifier>()))
         {
-            paramDecl->type.type = payloadTy->getElementType();
-            addModifier(paramDecl, m_astBuilder->create<PayloadParameterModifier>());
-            // Disallow direction modifiers on payload wrapper (treat as pointer-like)
+            bool hasDirection = false;
             for (auto modifier : paramDecl->modifiers)
             {
-                if (as<InModifier>(modifier) || as<OutModifier>(modifier) || as<InOutModifier>(modifier))
+                if (as<InModifier>(modifier) || as<OutModifier>(modifier) ||
+                    as<InOutModifier>(modifier) || as<RefModifier>(modifier) ||
+                    as<ConstRefModifier>(modifier))
                 {
-                    getSink()->diagnose(modifier, Diagnostics::invalidDirectionOnPayloadWrapper, paramDecl->getName());
+                    hasDirection = true;
+                    break;
                 }
+            }
+            if (!hasDirection)
+            {
+                addModifier(paramDecl, m_astBuilder->create<InOutModifier>());
             }
         }
-        else
+        else if (auto declRefType = as<DeclRefType>(paramDecl->type.type))
         {
-            // Fallback: recognize wrappers by name as plain generics.
-            auto tryUnwrapByName = [&](const char* name, Modifier* marker) -> bool {
-                if (auto declRefType = as<DeclRefType>(paramDecl->type.type))
+            auto baseDecl = declRefType->getDeclRef().getDecl();
+            if (baseDecl && baseDecl->getName() && String(baseDecl->getName()->text) == "PushConstant")
+            {
+                // Unwrap and apply uniform + push constant attribute.
+                Type* innerType = nullptr;
+                SubstitutionSet subst(declRefType->getDeclRef());
+                subst.forEachSubstitutionArg([&](Val* arg) { if (auto t = as<Type>(arg)) innerType = t; });
+                if (!innerType)
                 {
-                    auto baseDecl = declRefType->getDeclRef().getDecl();
-                    if (!baseDecl || !baseDecl->getName()) return false;
-                    if (String(baseDecl->getName()->text) != name) return false;
-
-                    Type* innerType = nullptr;
-                    SubstitutionSet subst(declRefType->getDeclRef());
-                    bool found = false;
-                    subst.forEachSubstitutionArg([&](Val* arg) {
-                        if (found) return;
-                        if (auto t = as<Type>(arg))
-                        {
-                            innerType = t;
-                            found = true;
-                        }
-                    });
-                    if (!innerType)
-                    {
-                        getSink()->diagnose(paramDecl, Diagnostics::invalidTypeVoid);
-                        return false;
-                    }
+                    getSink()->diagnose(paramDecl, Diagnostics::invalidTypeVoid);
+                }
+                else
+                {
                     paramDecl->type.type = innerType;
-                    addModifier(paramDecl, marker);
-                    return true;
-                }
-                return false;
-            };
-
-            if (tryUnwrapByName("ShaderRecord", m_astBuilder->create<ShaderRecordAttribute>()))
-            {
-            }
-            else if (tryUnwrapByName("HitAttribute", m_astBuilder->create<HitAttributeParameterModifier>()))
-            {
-                for (auto modifier : paramDecl->modifiers)
-                {
-                    if (as<OutModifier>(modifier) || as<InOutModifier>(modifier))
+                    bool hasUniform2 = false;
+                    for (auto m : paramDecl->modifiers)
                     {
-                        getSink()->diagnose(
-                            modifier,
-                            Diagnostics::dontExpectOutParametersForStage,
-                            UnownedStringSlice("hit-attribute"));
-                        break;
+                        if (as<HLSLUniformModifier>(m)) { hasUniform2 = true; break; }
                     }
-                }
-            }
-            else if (tryUnwrapByName("Payload", m_astBuilder->create<PayloadParameterModifier>()))
-            {
-                bool hasDirection = false;
-                for (auto modifier : paramDecl->modifiers)
-                {
-                    if (as<InModifier>(modifier) || as<OutModifier>(modifier) ||
-                        as<InOutModifier>(modifier) || as<RefModifier>(modifier) ||
-                        as<ConstRefModifier>(modifier))
+                    if (!hasUniform2)
                     {
-                        hasDirection = true;
-                        break;
+                        addModifier(paramDecl, m_astBuilder->create<HLSLUniformModifier>());
                     }
-                }
-                if (!hasDirection)
-                {
-                    addModifier(paramDecl, m_astBuilder->create<InOutModifier>());
+                    addModifier(paramDecl, m_astBuilder->create<PushConstantAttribute>());
                 }
             }
         }

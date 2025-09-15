@@ -5,7 +5,7 @@ struct MyPayload
     float4 color;
 };
 
-void main(Payload<MyPayload> p)
+void main(PayloadState<MyPayload> p)
 {
     // default direction is inout; write to ensure it's materialized
     p.color = float4(1, 2, 3, 4);

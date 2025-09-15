@@ -2343,20 +2343,36 @@ __intrinsic_type($(kIROp_ParameterBlockType))
 __magic_type(ParameterBlockType)
 struct ParameterBlock {}
 
-// Wrapper types for explicit entry-point parameter binding kinds for ray tracing.
-// These are generic markers erased during semantic checking; they do not
-// introduce runtime layout on their own.
+/// @category stage_io
+/// A wrapper type which indicates that an entrypoint parameter of type `T` should be bound 
+/// to the shader record for the current entrypoint. Valid for all ray tracing entrypoints.
 __generic<T>
 __magic_type(ShaderRecordType)
 struct ShaderRecord {}
 
+/// @category stage_io
+/// A wrapper type which indicates that an entrypoint parameter of type `T` should be bound
+/// to hit attribute registers provided to the current entrypoint. Only valid for any hit or
+/// closest hit entrypoints.
 __generic<T>
 __magic_type(HitAttributeType)
 struct HitAttribute {}
 
+/// @category stage_io
+/// A wrapper type which indicates that an entrypoint parameter of type `T` should be bound
+/// to the payload registers provided to the current entrypoint. Valid for any hit, closest hit,
+/// miss, or callable entrypoint types.
 __generic<T>
 __magic_type(PayloadType)
-struct Payload {}
+struct PayloadState {}
+
+/// @category stage_io
+/// A wrapper type which indicates that an entrypoint parameter of type `T` should be treated
+/// as a push-constant/uniform parameter. Equivalent to applying `uniform` with Vulkan
+/// push-constant semantics when targeting Vulkan.
+__generic<T>
+__magic_type(PushConstantType)
+struct PushConstant {}
 
 /// @category stage_io
 __generic<T, let MAX_VERTS : uint>

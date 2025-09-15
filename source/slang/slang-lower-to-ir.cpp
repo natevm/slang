@@ -2202,6 +2202,33 @@ struct ValLoweringVisitor : ValVisitor<ValLoweringVisitor, LoweredValInfo, Lower
         return lowerSimpleIntrinsicType(type);
     }
 
+    // Wrapper entry-point parameter types are generic-but-not-intrinsic.
+    // They should have been desugared away during checking, but if any survive
+    // to IR lowering (e.g., in error-tolerant paths), lower them to their
+    // element type instead of asserting on missing IntrinsicTypeModifier.
+    IRType* visitShaderRecordType(ShaderRecordType* type)
+    {
+        return lowerType(context, type->getElementType());
+    }
+
+    IRType* visitHitAttributeType(HitAttributeType* type)
+    {
+        return lowerType(context, type->getElementType());
+    }
+
+    IRType* visitPayloadType(PayloadType* type)
+    {
+        return lowerType(context, type->getElementType());
+    }
+
+    IRType* visitPushConstantType(PushConstantType* type)
+    {
+        // Wrapper types should have been desugared in checking.
+        // Lower any survivors to their element type to avoid
+        // requiring intrinsic type modifiers.
+        return lowerType(context, type->getElementType());
+    }
+
     IRType* visitUntypedBufferResourceType(UntypedBufferResourceType* type)
     {
         return lowerSimpleIntrinsicType(type);
